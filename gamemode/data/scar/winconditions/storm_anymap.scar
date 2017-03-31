@@ -1,0 +1,1684 @@
+----------------------------------------------------------------------------
+-- Storm Mode
+-- October 2, 2014
+-- Jam Team: Tony Bergelt, Benjamin Calaf, Ian Cumming 
+-- Shannon Gadbois, Mark Lawson, Cynthia Lew, Sacha Narine, Quentin Wallis
+----------------------------------------------------------------------------
+-- REQUIREMENTS FOR A CUSTOM STORM MAP
+-- Place a Victory Point near team 1's base
+-- Place a Victory Point near team 2's base. It cannot be the same as team 1's point!
+-- Place two territory_point_fuel objects on the map. These will be replaced with special Military Hospitals
+-- Ensure that both teams have relatively equivalent access to one or both hospitals
+-- Place a Victory Point in the dead center of the map. You must use the ebp victory_point_no_swap.
+-- Make the capture zone of this central Victory Point about twice the size or a regular capture zone
+-- Place one to nine markers: mkr_drop_01 --> mkr_drop_09 (fewer than nine is okay)
+-- Ensure these markers are evenly spaced near the center of the map, between the two bases
+----------------------------------------------------------------------------
+
+import("ScarUtil.scar")
+import("Fatalities/Fatalities.scar")
+import("Prototype/WorldEntityCollector.scar")
+import("Prototype/VPTickerWin-Annihilate_Functions.scar")
+import("WinConditions/Annihilate.scar")
+import("Prototype/SpecialAEFunctions.scar")
+import("PrintOnScreen.scar")
+
+-------------------------------------------------------------------------
+-- [[ SETUP ]]
+-------------------------------------------------------------------------
+function OnGameSetup()
+
+	g_modID = "1e7d6ba9532e43e4985d7ee964c87d50:"
+	
+	g_tier3_active = false
+	g_gameisover = false
+	g_gameVP = Setup_GetVictoryPointTickerOption()
+	g_dropOwner = World_GetPlayerAt(1)
+	g_dropIndex = World_GetRand(1,4)
+	g_lastDropOwner = 0
+
+	-- Player Restrictions
+	g_playerManpower 		= 9999
+	g_playerMunition 		= 200
+	g_playerFuel 			= 0
+	g_playerCommandPoints	= 0
+	g_playerCPRate			= 1
+	g_playerProductionRate 	= 2
+	g_dispatchRechargeTime	= 0.1
+	
+	g_team1 = 1
+	g_team2 = 2	
+	
+	g_winningTeam = 0
+	
+	g_customMap = false
+	g_captureObjectiveAllowed = false
+	g_currentTier = 1
+	
+	g_mapSize = math.sqrt(World_GetWidth() * World_GetLength())
+	
+	-- TIMERS to Tier 2 and 3
+	-- Try to scale the time between Tiers based on the map size, player count, and max VPs
+	g_timeToTier2 = 240 * (g_mapSize / 400)^0.5 * (World_GetPlayerCount() / 4)^0.25 * (g_gameVP / 166)^0.5
+	g_timeToTier3 = 600 * (g_mapSize / 400)^0.5 * (World_GetPlayerCount() / 4)^0.25 * (g_gameVP / 166)^0.5
+	g_timeToModifier = (g_timeToTier2 + g_timeToTier3) / 2
+	
+	g_supplyDropInterval = 120
+	
+	-- Player Data Table: RaceID, TeamID, PlayerID, IsAlive, SGroup for Player Units
+	t_playerDataTable 		= {}
+	t_okwPlayers = {}
+	
+	--- SOVIET DISPATCH ABILITIES
+	
+	t_sovietTier1Dispatch = {"t5_dispatch_engineers", "t5_dispatch_conscripts", "t5_dispatch_maxim", "t5_dispatch_mortar", "t5_dispatch_sniper", "t5_dispatch_scoutcar"}
+	
+	t_sovietTier2Dispatch = {"t5_dispatch_penal", "t5_dispatch_guards", "t5_dispatch_halftrack_soviet","t5_dispatch_atgun_soviet", "t5_dispatch_t70", "t5_dispatch_t34"} 
+	
+	t_sovietTier3Dispatch = {"t5_dispatch_shock", "t5_dispatch_kv8",  "t5_dispatch_su85", "t5_dispatch_katyusha", "t5_dispatch_isu152", "t5_dispatch_is2"} 
+	
+	--- WEHRMACHT DISPATCH ABILITIES
+	
+	t_germanTier1Dispatch = {"t5_dispatch_pioneers", "t5_dispatch_grenadiers", "t5_dispatch_mg42", "t5_dispatch_granatewerfer", "t5_dispatch_sniper_german", "t5_dispatch_scoutcar_german"}
+	
+	t_germanTier2Dispatch = {"t5_dispatch_stormtroopers", "t5_dispatch_panzergrens", "t5_dispatch_halftrack", "t5_dispatch_atgun", "t5_dispatch_stug", "t5_dispatch_panzer4"} 
+	
+	t_germanTier3Dispatch = {"t5_dispatch_ubergrens", "t5_dispatch_ostwind",  "t5_dispatch_panzerwerfer", "t5_dispatch_brummbar", "t5_dispatch_panther", "t5_dispatch_tiger"} 
+	
+	--- US DISPATCH ABILITIES
+	
+	t_aefTier1Dispatch = {"t5_dispatch_rear_echelon", "t5_dispatch_riflemen", "t5_dispatch_m2hb_hmg", "t5_dispatch_truck", "t5_dispatch_atgun_aef", "t5_dispatch_pathfinders"}
+
+	t_aefTier2Dispatch = {"t5_dispatch_paratroopers", "t5_dispatch_greyhound", "t5_dispatch_halftrack_aef", "t5_dispatch_pack_howitzer", "t5_dispatch_stuart", "t5_dispatch_sherman"}
+	
+	t_aefTier3Dispatch = {"t5_dispatch_captain", "t5_dispatch_stuart75", "t5_dispatch_priest", "t5_dispatch_m10", "t5_dispatch_sherman76", "t5_dispatch_jackson"}
+	
+	--- OKW DISPATCH ABILITIES
+	
+	t_okwTier1Dispatch = {"t5_dispatch_engineers_okw", "t5_dispatch_volksgrenadiers", "t5_dispatch_kubelwagen", "t5_dispatch_atgun_okw", "t5_dispatch_mortar_okw", "t5_dispatch_jaeger"}
+	
+	t_okwTier2Dispatch = {"t5_dispatch_falls", "t5_dispatch_mg34", "t5_dispatch_ir_halftrack_okw", "t5_dispatch_puma_okw", "t5_dispatch_luchs", "t5_dispatch_panzer4_okw"}
+	
+	t_okwTier3Dispatch = {"t5_dispatch_obersoldaten", "t5_dispatch_stuka_halftrack", "t5_dispatch_jagdpanzer", "t5_dispatch_jagdtiger", "t5_dispatch_sturmtiger", "t5_dispatch_kingtiger"}
+	
+end
+
+-------------------------------------------------------------------------
+-- [[ ONINIT ]]
+-------------------------------------------------------------------------
+function OnInit_Delayed()
+	
+	-- Inititialize Victory Points Conditions
+	VPTicker_OnInit()
+	
+	-- Initialize Annihilation Conditions; primarily using it to handle the surrender condition as we have a custom annihilation condition built in
+	Annihilate_CheckAnnihilation()
+	
+	-- Game Setup Conditions
+	OnGameSetup()
+	Storm_GetPlayerData()
+	
+	--- Entity GROUPS
+	eg_strats = EGroup_CreateIfNotFound("eg_strats")
+	eg_hospitals = EGroup_CreateIfNotFound("eg_hospitals")
+	eg_allVPs = EGroup_CreateIfNotFound("eg_allVPs")
+	eg_standardVPs = EGroup_CreateIfNotFound("eg_standardVPs")
+	eg_tempStrat = EGroup_CreateIfNotFound("eg_tempStrat")
+	eg_bonus_drop = EGroup_CreateIfNotFound("eg_bonus_drop")
+	eg_HQs_team1 = EGroup_CreateIfNotFound("eg_HQs_team1")
+	eg_HQs_team2 = EGroup_CreateIfNotFound("eg_HQs_team2")
+	eg_vp_team1 = EGroup_CreateIfNotFound("eg_vp_team1")
+	eg_vp_team2 = EGroup_CreateIfNotFound("eg_vp_team2")
+	
+	--- Squad GROUPS
+	sg_nearBaseVP1 = SGroup_CreateIfNotFound("sg_nearBaseVP1")
+	sg_nearBaseVP2 = SGroup_CreateIfNotFound("sg_nearBaseVP2")
+	
+	-- Initializes the Game Mode
+	Storm_IsCustomMap()
+	Storm_StartInit()
+	Storm_VictoryPointLocator()
+	
+	Rule_AddOneShot(UnlockTier2, g_timeToTier2) 
+	Rule_AddOneShot(UnlockTier3, g_timeToTier3)
+	Rule_AddDelayedInterval(Bonus_Timer, g_supplyDropInterval, 1)
+
+	Rule_AddInterval(_ArtilleryUnlock1_Team1, 5)
+	Rule_AddInterval(_ArtilleryUnlock1_Team2, 5)
+	
+	Rule_AddOneShot(HideCPMeter, 2)
+	
+	if g_captureObjectiveAllowed then
+		EGroup_InstantCaptureStrategicPoint(eg_vp_team1, World_GetPlayerAt(1))
+		EGroup_InstantCaptureStrategicPoint(eg_vp_team2, Player_FindFirstEnemyPlayer(World_GetPlayerAt(1)))
+		Rule_AddOneShot(startCaptureObjective, 3)
+		Rule_AddInterval(VP_Base_Win_Check, 1)
+		Rule_AddDelayedInterval(VP_AutoDefense, 15, 6)
+		Rule_AddDelayedInterval(_captureWarning_Team1, 30, 1)
+		Rule_AddDelayedInterval(_captureWarning_Team2, 30, 1)
+	end
+	
+	if g_customMap then
+		Rule_AddOneShot(Storm_SetVPs, 2)
+	end
+	
+end
+
+function OnInit()
+	-- Slight delay to allow entity replacements to occur before putting map entities into egroups
+	Rule_AddOneShot(OnInit_Delayed, 0.5)
+end
+
+Scar_AddInit(OnInit)
+
+
+function Storm_StartInit()
+	
+	-- Retrieves information on each player; e.g. playerID, teamID, race, etc.
+	Storm_GetPlayerData()
+	
+	-- Sets a number of conditions for each player;  e.g. starting resources
+	Storm_Restrictions()
+	
+	if g_customMap then
+		Storm_AtmosphereTransition1()
+	end
+	
+	-- Kick off the main objective 
+	Storm_StartTimerObjective()
+
+end
+
+--------------------------------------------------------------------------------------------------------
+--- Gets the data for each player such as team, unit count, race, etc. and stores it within a table
+--------------------------------------------------------------------------------------------------------
+function Storm_GetPlayerData()
+
+	local playerCount = World_GetPlayerCount()
+	
+	if playerCount >= 1 then
+		g_team1 = Player_GetTeam(World_GetPlayerAt(1))
+		g_team2 = Team_GetEnemyTeam(g_team1)
+	
+		-- Create a table that stores the player's data
+		for i=1, playerCount do
+			local playerID = World_GetPlayerAt(i)
+			t_playerDataTable[i] = {
+				player = playerID,
+				screenName = Player_GetDisplayName(playerID),
+				index = i,
+				raceID = Player_GetRace(playerID),
+				race = Player_GetRaceName(playerID),
+				team = Player_GetTeam(playerID),
+				human = Player_IsHuman(playerID),
+				dead = Player_IsAlive(playerID),
+				playerUnits = SGroup_CreateIfNotFound("playerUnits_"..i)
+			}
+			
+			-- Setup a variable to track what player is on each team
+			if t_teamUnitCheck == nil then
+			
+				g_playerTeam_1 = Player_GetTeam(playerID)
+				g_playerTeam_2 = Team_GetEnemyTeam(g_playerTeam_1)
+				
+				-- This table is used to check whether a team has won a round, whether all players on a team have lost all their units, and to get the teamIDs
+				-- This table is later used to check who won the round or game
+				t_teamUnitCheck = { 
+				
+					{ 
+						teamID = g_playerTeam_1,
+						dead = false,
+						teamWins = 0
+					},
+					{ 
+						teamID = g_playerTeam_2, 
+						dead = false,
+						teamWins = 0
+					}
+				}
+				
+			end
+		end
+		
+	end
+
+end
+
+-------------------------------------------------------------------------------------
+--- Game mode restrictions; sets things like starting resources and max population
+--- Grant and lock out abilities and upgrades as necessary
+-------------------------------------------------------------------------------------
+function Storm_Restrictions()
+	
+	for k, v in pairs (t_playerDataTable) do
+	
+		-- Modify Dispatch Recharge Timers
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("mortar_halftrack"), 		g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("elefant_unlock"),			g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("tiger_tank"), 				g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("assault_field_officer"), 	g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("cmd_kv-8_unlock"), 		g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("cmd_t34_85_medium_tank"), 	g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("cmd_shock_troops"), 		g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("cmd_isu-152"), 			g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("cmd_guard_troops"), 		g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("cmd_120mm_mortar_crew"), 	g_dispatchRechargeTime)
+		Modify_AbilityRechargeTime(v.player, BP_GetAbilityBlueprint("cmd_is2_heavy_tank"), 		g_dispatchRechargeTime)
+		
+		Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "single_shot_mortar_t5"))
+		Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "single_shot_mortar_t5"), ITEM_DEFAULT)
+		
+		Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "il-2_recon_t5"))
+		Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "il-2_recon_t5"), ITEM_DEFAULT)
+		
+		Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "air_dropped_munitions_t5"))
+		
+		-- Resource Mods for Players
+		Modify_PlayerResourceRate(v.player, RT_Fuel, 	0, MUT_Multiplication)
+		Modify_PlayerResourceRate(v.player, RT_Action, 	g_playerCPRate, MUT_Multiplication)
+		
+		Player_SetResource(v.player, RT_Manpower,  g_playerManpower)
+		Player_SetResource(v.player, RT_Fuel,      g_playerFuel)
+		Player_SetResource(v.player, RT_Command,   g_playerCommandPoints)
+		if g_customMap then
+			Modify_PlayerResourceRate(v.player, RT_Munition, 0, MUT_Multiplication)
+			Player_SetResource(v.player, RT_Munition,  g_playerMunition)
+		else
+			Player_SetResource(v.player, RT_Munition,  (g_playerMunition/2))
+		end
+		
+		Modify_PlayerProductionRate(v.player, g_playerProductionRate)
+		if v.race == "west_german" then
+			Player_SetPopCapOverride(v.player, 25)
+		else
+			Player_SetPopCapOverride(v.player, 30)
+		end
+		
+		-- SOVIET Restrictions
+		if v.race == "soviet" then
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.BARRACKS_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.WEAPON_SUPPORT_CENTER_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.TANK_DEPOT_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.MOTORPOOL_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.M1937_152MM_ML_20_ARTILLERY_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.ARTILLERY_203MM_B4, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.OBSERVATION_POST_FUEL_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.SOVIET.OBSERVATION_POST_MUNITION_MP, ITEM_REMOVED)
+			Player_SetUpgradeAvailability(v.player, UPG.SOVIET.HQ_HEALING_AURA_MP, ITEM_REMOVED)
+			Player_SetSquadProductionAvailability(v.player, SBP.SOVIET.CONSCRIPT_SQUAD_MP, ITEM_REMOVED)
+			Player_SetAbilityAvailability(v.player, ABILITY.SOVIET.SOVIET_HQ_ENGINEER_CALL_IN, ITEM_REMOVED)
+			
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "incendiary_artillery_t5"))
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "il-2_precision_bomb_t5"))
+			
+			Modify_EntityCostMult(v.player, EBP.SOVIET.COMBAT_ENGINEER_MP, RT_Manpower, 0) 
+			Player_SetConstructionMenuAvailability(v.player, "tp_construction_soviet_engineer", ITEM_REMOVED)
+			
+			for k1,ability in pairs(t_sovietTier1Dispatch) do
+				Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+			end
+
+			Cmd_Upgrade(v.player, UPG.SOVIET.HQ_MOLOTOV_GRENADE_MP, 1, true)
+			Cmd_Upgrade(v.player, UPG.SOVIET.HQ_ANTI_TANK_GRENADE_MP, 1, true)
+	
+		end
+		
+		-- GERMAN Restrictions
+		if v.race == "german" then
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.BEREICH_FESTUNG_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.DOLCH_AKTIONEN_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.HINTERE_PANZERWERK_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.SCHWERES_KRIEGSWERK_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.BUNKER_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.SLIT_TRENCH_GERMAN_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.PAK43_88MM_AT_GUN_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.HOWITZER_105MM_LE_FH18_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.MUNITION_POST_GERMAN_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.GERMAN.FUEL_POST_GERMAN_MP, ITEM_REMOVED)
+			Player_SetAbilityAvailability(v.player, ABILITY.GERMAN.GERMAN_HQ_PIONEER_CALL_IN, ITEM_REMOVED)
+			Cmd_Upgrade(v.player, BP_GetUpgradeBlueprint("battle_phase_2"), 1, true)
+			
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "light_artillery_t5"))
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "railway_gun_artillery_ultimate"))
+			Player_SetAbilityAvailability(v.player, ABILITY.GERMAN.GRENADIER_PANZERFAUST_MP, ITEM_DEFAULT)
+			
+			Modify_EntityCostMult(v.player, EBP.GERMAN.PIONEER_MP, RT_Manpower, 0)
+			Player_SetConstructionMenuAvailability(v.player, "tp_construction_german_pioneer_advanced", ITEM_REMOVED)
+			
+			for k1,ability in pairs(t_germanTier1Dispatch) do
+				Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+			end
+		end
+		
+		-- AEF Restrictions
+		if v.race == "aef" then
+	
+			Cmd_Upgrade(v.player, UPG.AEF.BAR_UPGRADE_MP, 1, true)
+			Cmd_Upgrade(v.player, UPG.AEF.BAZOOKA_UPGRADE_MP, 1, true)
+			Cmd_Upgrade(v.player, UPG.AEF.RIFLE_COMMAND_GRENADE_MP, 1, true)
+			Modify_EntityCostMult(v.player, EBP.AEF.REAR_ECHELON_TROOP_MP, RT_Manpower, 0)
+			Player_SetSquadProductionAvailability(v.player, SBP.AEF.RIFLEMEN_SQUAD_MP, ITEM_REMOVED)
+			Player_SetSquadProductionAvailability(v.player, SBP.AEF.DODGE_WC51_AMBULANCE_SQUAD_MP, ITEM_REMOVED)
+			Player_SetConstructionMenuAvailability(v.player, "tp_construction_soviet_engineer_basic", ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.AEF.OBSERVATION_POST_MUNITION_AEF_MP, ITEM_REMOVED)
+			Player_SetEntityProductionAvailability(v.player, EBP.AEF.OBSERVATION_POST_FUEL_AEF_MP, ITEM_REMOVED)
+			Player_SetAbilityAvailability(v.player, ABILITY.AEF.AEF_HQ_ENGINEER_CALL_IN, ITEM_REMOVED)
+			
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "smoke_flares_t5"))
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "p47_rocket_attack_t5"))
+
+			for k1,ability in pairs(t_aefTier1Dispatch) do
+				Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+			end
+			
+			local playerEntities = Player_GetEntities(v.player)
+			EGroup_Filter(playerEntities, {EBP.AEF.ARMORED_RIFLE_COMMAND_MP, EBP.AEF.ARMOR_COMMAND_MP, EBP.AEF.COMPANY_WEAPONS_POOL_MP}, FILTER_KEEP)
+			EGroup_SetWorldOwned(playerEntities)
+			EGroup_SetSelectable(playerEntities, false)
+		end
+		
+		-- OKW Restrictions
+		if v.race == "west_german" then
+	
+			Modify_EntityCostMult(v.player, EBP.WEST_GERMAN.ASSAULT_PIONEER_MP, RT_Manpower, 0)
+			Player_SetSquadProductionAvailability(v.player, SBP.WEST_GERMAN.VOLKSGRENADIER_SQUAD_MP, ITEM_REMOVED)
+			Player_SetSquadProductionAvailability(v.player, SBP.WEST_GERMAN.RAKETENWERFER43_88MM_PUPPCHEN_ANTITANK_GUN_SQUAD_MP, ITEM_REMOVED)
+			Player_SetSquadProductionAvailability(v.player, SBP.WEST_GERMAN.KUBELWAGEN_SQUAD_MP, ITEM_REMOVED)
+			Player_SetSquadProductionAvailability(v.player, SBP.WEST_GERMAN.KING_TIGER_SQUAD_MP, ITEM_REMOVED)
+			Player_SetConstructionMenuAvailability(v.player, "tp_construction_soviet_engineer_basic", ITEM_REMOVED)
+			Player_SetAbilityAvailability(v.player, ABILITY.WEST_GERMAN.WG_HQ_PIONEER_CALL_IN, ITEM_REMOVED)
+			Player_SetAbilityAvailability(v.player, ABILITY.WEST_GERMAN.PIONEER_VOLKS_SALVAGE, ITEM_REMOVED)
+			
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "zeroing_artillery_t5"))
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "stuka_fragmentation_airstrike_t5"))
+
+			for k1,ability in pairs(t_okwTier1Dispatch) do
+				Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+			end
+			
+			local playerEntities = Player_GetEntities(v.player)
+			EGroup_Filter(playerEntities, {EBP.AEF.ARMORED_RIFLE_COMMAND_MP, EBP.AEF.ARMOR_COMMAND_MP, EBP.AEF.COMPANY_WEAPONS_POOL_MP}, FILTER_KEEP)
+			EGroup_SetWorldOwned(playerEntities)
+			EGroup_SetSelectable(playerEntities, false)
+			table.insert(t_okwPlayers, v.player)
+			
+			Player_SetAbilityAvailability(v.player, ABILITY.WEST_GERMAN.SWS_HALFTRACK_INTERVAL_DISPATCH, ITEM_REMOVED)
+			
+			Cmd_Upgrade(v.player, UPG.WEST_GERMAN.BUILDING_1, 1, true)
+			Cmd_Upgrade(v.player, UPG.WEST_GERMAN.BUILDING_2, 1, true)
+			Cmd_Upgrade(v.player, UPG.WEST_GERMAN.BUILDING_3, 1, true)
+			Cmd_Upgrade(v.player, UPG.WEST_GERMAN.PANZERSCHRECK_UNLOCKED, 1, true)
+			
+		end
+		
+		if v.human == false then
+			-- Turn off AI for testing purposes
+--~ 			AI_Enable(v.player, false)
+		end
+	
+	end
+	
+	--- Gather all Field Hospitals and put a hintpoint on them
+	World_GetStrategyPoints(eg_hospitals, true)
+	EGroup_Filter(eg_hospitals, BP_GetEntityBlueprint(g_modID .. "ebps/gameplay/tactical_objectives/military_hospital_t5"), FILTER_KEEP)
+	local addHint = function (gid, idx, eid)
+		HintPoint_Add(eid, true, "$1e7d6ba9532e43e4985d7ee964c87d50:70", 3)
+	end
+	EGroup_ForEach(eg_hospitals, addHint)
+	
+	--- Gather all  VPs in an EGroup
+	World_GetStrategyPoints(eg_allVPs, true)
+	EGroup_Filter(eg_allVPs, {BP_GetEntityBlueprint("ebps/gameplay/victory_point") ,BP_GetEntityBlueprint(g_modID .. "ebps/gameplay/victory_point_t5")}, FILTER_KEEP)
+	
+	--- Gather all standard VPs in an EGroup
+	World_GetStrategyPoints(eg_standardVPs, true)
+	EGroup_Filter(eg_standardVPs, BP_GetEntityBlueprint("ebps/gameplay/victory_point"), FILTER_KEEP)
+	
+	--- Gather all  Strats in an EGroup
+	World_GetStrategyPoints(eg_strats, true)
+	EGroup_Filter(eg_strats, BP_GetEntityBlueprint(g_modID .. "ebps/gameplay/territory_point_t5"), FILTER_KEEP)
+	
+	if g_customMap then
+		if EGroup_Count(eg_hospitals) > 0 then
+			EGroup_Add(eg_medical_bay, EGroup_GetSpawnedEntityAt(eg_hospitals, 1))
+		end
+		if EGroup_Count(eg_hospitals) > 1 then
+			EGroup_Add(eg_support_bay, EGroup_GetSpawnedEntityAt(eg_hospitals, 2))
+		end
+	end
+	
+	if table.getn(t_okwPlayers) > 0 then
+		Rule_AddInterval(OKW_RemoveHalftracks, 1)
+	end
+	
+end
+
+---------------------------------------------------------------------
+-- Sets the number of victory points needed in order to win the game
+---------------------------------------------------------------------
+function Storm_SetVPs()
+
+	VPTicker_SetTeamTickers( g_playerTeam_1, g_gameVP, true )
+	VPTicker_SetTeamTickers( g_playerTeam_2, g_gameVP, true )
+	WinWarning_SetMaxTickers(g_gameVP, g_gameVP) 
+
+end
+
+function HideCPMeter()
+	UI_SetCPMeterVisibility(false)
+end
+
+---------------------------------------------------------------------
+-- Start a timer that counts down to the next tier of reinforcements
+---------------------------------------------------------------------
+function Storm_StartTimerObjective()
+
+	OBJ_Timer = {
+		
+		SetupUI = function() 
+
+		end,
+		
+		OnStart = function()
+		
+		end,
+		
+		OnComplete = function()
+
+		end,
+		
+		OnFail = function()
+		end,
+		
+		IsComplete = function()
+			return false
+		end,
+		
+		Intel_Start = nil,				-- Event will play when obj starts but before any UI appears
+		Intel_Complete = nil,			-- Event will play when obj completes but before UI is cleared
+		Intel_Fail = nil,				-- Event will play when obj fails but before UI is cleared
+		Title = "$1e7d6ba9532e43e4985d7ee964c87d50:52", -- LOCDB [52] 'Tier 2 reinforcements in:'
+		Description = 1459051,			-- Objective Description
+		TitleEnd = 11045302, -- LOCDB [11045302] 'Extraction in progress'
+		TitleFail = 11045303, -- LOCDB [11045303] 'Isakovich was killed'
+		Type = OT_Primary,				-- Objective Type (OT_Primary, OT_Secondary)
+	}
+	
+	Objective_Register(OBJ_Timer)
+	
+	Objective_Start(OBJ_Timer)
+	Objective_StartTimer(OBJ_Timer, COUNT_DOWN, g_timeToTier2, 30)
+	Obj_ShowProgress("$1e7d6ba9532e43e4985d7ee964c87d50:90", 1)
+	Rule_AddDelayedInterval(UpdateProgressTimer, 3, 1)
+
+end
+
+-------------------------------------------------------------------------------------------------
+-- Objective to capture the VP nearest to the enemy's base (on maps with suitable VP layout)
+-------------------------------------------------------------------------------------------------
+function startCaptureObjective()
+
+	OBJ_Capture = {
+		
+		SetupUI = function()
+			HintPoint_Add(eg_vp_team1, true, "$1e7d6ba9532e43e4985d7ee964c87d50:86", 5)
+			HintPoint_Add(eg_vp_team2, true, "$1e7d6ba9532e43e4985d7ee964c87d50:87", 5)
+		end,
+		
+		OnStart = function()
+			Modify_CaptureTime(eg_vp_team1, 0.5)
+			Modify_CaptureTime(eg_vp_team2, 0.5)
+		
+		end,
+		
+		OnComplete = function()
+
+		end,
+		
+		OnFail = function()
+		end,
+		
+		IsComplete = function()
+			return false
+		end,
+		
+		Intel_Start = nil,				-- Event will play when obj starts but before any UI appears
+		Intel_Complete = nil,			-- Event will play when obj completes but before UI is cleared
+		Intel_Fail = nil,				-- Event will play when obj fails but before UI is cleared
+		Title = "$1e7d6ba9532e43e4985d7ee964c87d50:88", -- LOCDB [52] 'Tier 2 reinforcements in:'
+		Description = 1459051,			-- Objective Description
+		TitleEnd = 11045302, -- LOCDB [11045302] 'Extraction in progress'
+		TitleFail = 11045303, -- LOCDB [11045303] 'Isakovich was killed'
+		Type = OT_Primary,				-- Objective Type (OT_Primary, OT_Secondary)
+	}
+	
+	Objective_Register(OBJ_Capture)
+	
+	Objective_Start(OBJ_Capture)
+
+end
+
+-- Update the timer's UI element
+function UpdateProgressTimer()
+	local currentTime = Objective_GetTimerSeconds(OBJ_Timer)
+	if currentTime > 0 and Objective_IsVisible(OBJ_Timer) then
+		if Rule_Exists(UnlockTier2) then
+			Obj_ShowProgress("$1e7d6ba9532e43e4985d7ee964c87d50:90", (currentTime/g_timeToTier2))
+		elseif Rule_Exists(UnlockTier3) then
+			Obj_ShowProgress("$1e7d6ba9532e43e4985d7ee964c87d50:91", (currentTime/(g_timeToTier3 - g_timeToTier2)))
+		end
+	elseif Objective_IsVisible(OBJ_Timer) == false then
+		Obj_HideProgress()
+		Rule_RemoveMe()
+	end
+end
+
+---------------------------------------------------------------------
+-- Do end the match if the player's HQ VP is captured
+---------------------------------------------------------------------
+function VP_Base_Win_Check()
+	if Team_OwnsEGroup(g_playerTeam_1, eg_vp_team2) then 
+		g_gameisover = true
+		g_winningTeam = g_playerTeam_1
+		Rule_RemoveAll()
+		Util_StartIntel(VPVictoryMessageEvent)
+		g_outroNIS = NIS_OUTRO
+		Rule_AddOneShot(_DelayedWin, 4)
+		Rule_RemoveMe()
+	elseif Team_OwnsEGroup(g_playerTeam_2, eg_vp_team1) then
+		g_gameisover = true
+		g_winningTeam = g_playerTeam_2
+		Rule_RemoveAll()
+		Util_StartIntel(VPVictoryMessageEvent)
+		g_outroNIS = NIS_OUTRO2
+		Rule_AddOneShot(_DelayedWin, 4)
+		Rule_RemoveMe()
+	end
+end
+
+function _DelayedWin()
+	World_SetTeamWin( g_winningTeam )
+end
+
+
+---------------------------------------------------------------------
+-- Automated VP Defense: If the player owns one or both hospitals,
+-- automatically drop mortars on their VP when it is contested.
+---------------------------------------------------------------------
+function VP_AutoDefense()  
+	
+	if EGroup_Exists("eg_hospitals") and not EGroup_IsEmpty(eg_hospitals) then
+	
+		if Team_OwnsEGroup(g_playerTeam_1, eg_hospitals, ANY) and not EGroup_IsEmpty(eg_vp_team1) then
+			local players = Team_GetPlayers(g_playerTeam_1)
+			local enemyPlayers = Team_GetPlayers(g_playerTeam_2)
+			local player = players[1]
+			for k, v in pairs(enemyPlayers) do
+				UI_CreateEntityKickerMessage(v, EGroup_GetSpawnedEntityAt(eg_vp_team1, 1), "$1e7d6ba9532e43e4985d7ee964c87d50:53") -- locdb: Mortar Overwatch is Active
+			end
+			Team_GetAllSquadsNearMarker(g_playerTeam_2, sg_nearBaseVP1, EGroup_GetPosition(eg_vp_team1), 15)
+			if not SGroup_IsEmpty(sg_nearBaseVP1) then
+				if Player_IsAlive(player) then
+					Cmd_Ability(player, BP_GetAbilityBlueprint(g_modID .. "single_shot_mortar_t5"), sg_nearBaseVP1, nil, true)
+				end
+			end
+		end
+		
+		if Team_OwnsEGroup(g_playerTeam_2, eg_hospitals, ANY) and not EGroup_IsEmpty(eg_vp_team1) then
+			local players = Team_GetPlayers(g_playerTeam_2)
+			local enemyPlayers = Team_GetPlayers(g_playerTeam_1)
+			local player = players[1]
+			for k, v in pairs(enemyPlayers) do
+				UI_CreateEntityKickerMessage(v, EGroup_GetSpawnedEntityAt(eg_vp_team2, 1), "$1e7d6ba9532e43e4985d7ee964c87d50:53") -- locdb: Mortar Overwatch is Active
+			end
+			Team_GetAllSquadsNearMarker(g_playerTeam_1, sg_nearBaseVP2, EGroup_GetPosition(eg_vp_team2), 15)
+			if not SGroup_IsEmpty(sg_nearBaseVP2) then
+				if Player_IsAlive(player) then
+					Cmd_Ability(player, BP_GetAbilityBlueprint(g_modID .. "single_shot_mortar_t5"), sg_nearBaseVP2, nil, true)
+				end
+			end
+		end
+	end
+end
+
+---------------------------------------------------------------------
+-- Warn the player(s) if their base VP is neutralized or being captured
+---------------------------------------------------------------------
+function _captureWarning_Team1()
+	if not Team_OwnsEGroup(g_playerTeam_1, eg_vp_team1) then 
+		if Player_GetTeam(Game_GetLocalPlayer()) == g_playerTeam_1 then
+			if SGroup_Exists("sg_nearBaseVP1") and not SGroup_IsEmpty(sg_nearBaseVP1) then
+				Util_MissionTitle("$1e7d6ba9532e43e4985d7ee964c87d50:54") --locdb: Your base VP is being captured!
+			end
+		end
+		Rule_RemoveMe()
+		Rule_AddDelayedInterval(_captureWarning_Team1, 30, 1)
+	else
+		Rule_RemoveMe()
+		Rule_AddDelayedInterval(_captureWarning_Team1, 2, 1)
+	end
+end
+
+function _captureWarning_Team2()
+	if not Team_OwnsEGroup(g_playerTeam_2, eg_vp_team2) then
+		if Player_GetTeam(Game_GetLocalPlayer()) == g_playerTeam_2 then
+			if SGroup_Exists("sg_nearBaseVP2") and not SGroup_IsEmpty(sg_nearBaseVP2) then
+				Util_MissionTitle("$1e7d6ba9532e43e4985d7ee964c87d50:54") --locdb: Your base VP is being captured!
+			end
+		end
+		Rule_RemoveMe()
+		Rule_AddDelayedInterval(_captureWarning_Team2, 30, 1)
+	else
+		Rule_RemoveMe()
+		Rule_AddDelayedInterval(_captureWarning_Team2, 2, 1)
+	end 
+end
+
+--------------------------------
+-- UNIT UNLOCKS
+--------------------------------
+
+function UnlockTier2()
+	Rule_RemoveIfExist(Bonus_Timer)
+	Rule_AddDelayedInterval(Bonus_Timer, g_supplyDropInterval, 1) -- start bonus
+
+	Util_MissionTitle("$1e7d6ba9532e43e4985d7ee964c87d50:55") -- locdb: REINFORCEMENT: New squads are available
+	eventCue_popCapIncrease = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", 11045310, 11045310, 30, true) -- LOCDB [11045310] 'Population Cap Increased'
+	function _flashEventCue() flashID_popCap = UI_FlashEventCue(eventCue_popCapIncrease, true) end
+	function _stopFlashingEventCue() UI_StopFlashing(flashID_popCap) end
+	Rule_AddOneShot(_flashEventCue, 1)
+	Rule_AddOneShot(_stopFlashingEventCue, 10)
+	t_abilityFlash1 = {}
+
+	for k, v in pairs (t_playerDataTable) do
+	
+		if g_customMap then
+			Player_AddResource(v.player, RT_Munition,  100)
+		else
+			Player_AddResource(v.player, RT_Munition,  50)
+		end
+		
+		if v.race == "west_german" then
+			Player_SetPopCapOverride(v.player, 45)
+		else
+			Player_SetPopCapOverride(v.player, 50)
+		end
+		
+		if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1")) == false then
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1"))
+		end
+		Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1"), ITEM_DEFAULT)
+		
+		-- Grant Veterancy to active squads, to encourage preserving some earlier-tier squads 
+		local squads = Player_GetSquads(v.player)
+		local currentVPs = VPTicker_GetTeamTickers(v.team)
+		local xpReward_vpBased = (g_gameVP - currentVPs) * 5
+		local xpReward = math.max(250, xpReward_vpBased)
+		SGroup_IncreaseVeterancyExperience(squads,xpReward)
+	
+	end
+	
+	g_currentTier = 2
+	
+	Storm_UnlockTier2Squads()
+	
+	Rule_AddOneShot(AbilityFlash1, 1)
+	Objective_UpdateText(OBJ_Timer, "$1e7d6ba9532e43e4985d7ee964c87d50:56", LOC(""), true) --locdb: Tier 3 reinforcements in:
+	Objective_StartTimer(OBJ_Timer, COUNT_DOWN, (g_timeToTier3 - g_timeToTier2), 30)
+	
+end 
+
+function AbilityFlash1()
+
+	flashID_sovietTier2 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_sovietTier2Dispatch[1]), true)
+	flashID_germanTier2 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_germanTier2Dispatch[1]), true)
+	flashID_aefTier2 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_aefTier2Dispatch[1]), true)
+	flashID_okwTier2 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_okwTier2Dispatch[1]), true)
+	
+	Rule_AddOneShot(RemoveAbilityFlash1, 10)
+
+end
+
+function RemoveAbilityFlash1()
+
+	if flashID_sovietTier2 ~= nil then
+		UI_StopFlashing(flashID_sovietTier2)
+	end
+	if flashID_germanTier2 ~= nil then
+		UI_StopFlashing(flashID_germanTier2)
+	end
+	if flashID_aefTier2 ~= nil then
+		UI_StopFlashing(flashID_aefTier2)
+	end
+	if flashID_okwTier2 ~= nil then
+		UI_StopFlashing(flashID_okwTier2)
+	end
+	
+end
+		
+
+function UnlockTier3()
+
+	Rule_RemoveIfExist(Bonus_Timer)
+	Rule_AddDelayedInterval(Bonus_Timer, g_supplyDropInterval, 1) -- start bonus
+	
+	g_tier3_active = true
+	Util_MissionTitle("$1e7d6ba9532e43e4985d7ee964c87d50:55") -- locdb: REINFORCEMENT: New squads are available
+	eventCue_popCapIncrease = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", 11045310, 11045310, 30, true) -- LOCDB [11045310] 'Population Cap Increased'
+	function _flashEventCue() flashID_popCap = UI_FlashEventCue(eventCue_popCapIncrease, true) end
+	function _stopFlashingEventCue() UI_StopFlashing(flashID_popCap) end
+	Rule_AddOneShot(_flashEventCue, 1)
+	Rule_AddOneShot(_stopFlashingEventCue, 10)
+	t_abilityFlash2 = {}
+
+	for k, v in pairs (t_playerDataTable) do
+
+		if g_customMap then
+			Player_AddResource(v.player, RT_Munition,  100)
+		else
+			Player_AddResource(v.player, RT_Munition,  50)
+		end
+		if v.race == "west_german" then
+			Player_SetPopCapOverride(v.player, 75)
+		else
+			Player_SetPopCapOverride(v.player, 80)
+		end
+	
+		if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2")) == false then
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2"))
+		end
+		Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2"), ITEM_DEFAULT)
+		
+		if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1")) then
+			Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1"), ITEM_REMOVED)
+		end
+		
+		-- Grant Veterancy to active squads, to encourage preserving some earlier-tier squads 
+		local squads = Player_GetSquads(v.player)
+		local currentVPs = VPTicker_GetTeamTickers(v.team)
+		local xpReward_vpBased = (g_gameVP - currentVPs) * 5
+		local xpReward = math.max(500, xpReward_vpBased)
+		
+		SGroup_IncreaseVeterancyExperience(squads,xpReward)
+		
+	end
+	
+	g_currentTier = 3
+	
+	Storm_UnlockTier3Squads()
+	
+	Rule_AddOneShot(AbilityFlash2, 1)
+	Obj_HideProgress()
+	Objective_UpdateText(OBJ_Timer, "$1e7d6ba9532e43e4985d7ee964c87d50:64", 0)
+	Rule_RemoveIfExist(UpdateProgressTimer)
+	Objective_StopTimer(OBJ_Timer)
+	
+	Rule_AddOneShot(Storm_UnlockMaxPopCap, g_timeToModifier)
+	
+end
+
+function AbilityFlash2()
+
+	flashID_sovietTier3 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_sovietTier3Dispatch[1]), true)
+	flashID_germanTier3 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_germanTier3Dispatch[1]), true)
+	flashID_aefTier3 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_aefTier3Dispatch[1]), true)
+	flashID_okwTier3 = UI_FlashAbilityButton(BP_GetAbilityBlueprint(g_modID .. t_okwTier3Dispatch[1]), true)
+	
+	Rule_AddOneShot(RemoveAbilityFlash2, 10)
+end
+
+function RemoveAbilityFlash2()
+
+	if flashID_sovietTier3 ~= nil then
+		UI_StopFlashing(flashID_sovietTier3)
+	end
+	if flashID_germanTier3 ~= nil then
+		UI_StopFlashing(flashID_germanTier3)
+	end
+	if flashID_aefTier3 ~= nil then
+		UI_StopFlashing(flashID_aefTier3)
+	end
+	if flashID_okwTier3 ~= nil then
+		UI_StopFlashing(flashID_okwTier3)
+	end
+	
+end
+
+----------------------------------------------------------------------------
+-- SQUAD UNLOCKS: Grant abilities that call in squads 
+----------------------------------------------------------------------------
+
+function Storm_UnlockTier1Squads(executer, target)
+
+	local t_players = {}
+	
+	--- If this function is being called from the AE, change abilities for only the executing player
+	if executer ~= nil and scartype(Util_GetPlayerOwner(executer)) == ST_PLAYER then
+		local playerID = Util_GetPlayerOwner(executer)
+		t_players[1] = {
+			player = playerID,
+			screenName = Player_GetDisplayName(playerID),
+			race = Player_GetRaceName(playerID),
+		}	
+	--- Otherwise, change abilities for all players
+	else
+		t_players = t_playerDataTable
+	end
+	
+	for k1, v in pairs (t_players) do
+	
+		if v.race == "soviet" then
+			for k,ability in pairs(t_sovietTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_sovietTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_sovietTier1Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "german" then
+			for k,ability in pairs(t_germanTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_germanTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_germanTier1Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "aef" then
+			for k,ability in pairs(t_aefTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_aefTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_aefTier1Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "west_german" then
+			for k,ability in pairs(t_okwTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_okwTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_okwTier1Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+		end
+		
+		--- SWITCH ABILITIES
+		if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1")) then
+			Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1"), ITEM_REMOVED)
+		end
+		
+		if g_currentTier == 3 then
+			if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier3" )) == false then
+				Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier3"))
+			end
+			Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier3"), ITEM_DEFAULT)
+		else 
+			if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2" )) == false then
+				Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2"))
+			end
+			Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2"), ITEM_DEFAULT)
+		end
+	end
+end
+
+function Storm_UnlockTier2Squads(executer, target)
+
+	local t_players = {}
+	
+	--- If this function is being called from the AE, change abilities for only the executing player
+	if executer ~= nil and scartype(Util_GetPlayerOwner(executer)) == ST_PLAYER then
+		local playerID = Util_GetPlayerOwner(executer)
+		t_players[1] = {
+			player = playerID,
+			screenName = Player_GetDisplayName(playerID),
+			race = Player_GetRaceName(playerID),
+		}	
+	--- Otherwise, change abilities for all players
+	else
+		t_players = t_playerDataTable
+	end
+	
+	for k1, v in pairs (t_players) do
+		if v.race == "soviet" then
+			for k,ability in pairs(t_sovietTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_sovietTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_sovietTier2Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "german" then
+			for k,ability in pairs(t_germanTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_germanTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_germanTier2Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "aef" then
+			for k,ability in pairs(t_aefTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_aefTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_aefTier2Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "west_german" then
+			for k,ability in pairs(t_okwTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_okwTier3Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_okwTier2Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+		end
+		
+		--- SWITCH ABILITIES
+		if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2")) then
+			Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2"), ITEM_REMOVED)
+		end
+		
+		if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1" )) == false then
+			Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1"))
+		end
+		Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier1"), ITEM_DEFAULT)
+	end
+	
+end
+
+
+function Storm_UnlockTier3Squads(executer, target)
+
+	local t_players = {}
+	
+	--- If this function is being called from the AE, change abilities for only the executing player
+	if executer ~= nil and scartype(Util_GetPlayerOwner(executer)) == ST_PLAYER then
+		local playerID = Util_GetPlayerOwner(executer)
+		t_players[1] = {
+			player = playerID,
+			screenName = Player_GetDisplayName(playerID),
+			race = Player_GetRaceName(playerID),
+		}	
+	--- Otherwise, change abilities for all players
+	else
+		t_players = t_playerDataTable
+	end
+	
+	for k1, v in pairs (t_players) do
+		if v.race == "soviet" then
+			for k,ability in pairs(t_sovietTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_sovietTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_sovietTier3Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "german" then
+			for k,ability in pairs(t_germanTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_germanTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_germanTier3Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "aef" then
+			for k,ability in pairs(t_aefTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_aefTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_aefTier3Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+			
+		elseif v.race == "west_german" then
+			for k,ability in pairs(t_okwTier1Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_okwTier2Dispatch) do
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_REMOVED)
+			end
+			for k,ability in pairs(t_okwTier3Dispatch) do
+				if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability)) == false then
+					Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. ability))
+				end
+				Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. ability), ITEM_DEFAULT)
+			end
+		end
+		
+		--- SWITCH ABILITIES
+		if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier3")) then
+			Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier3"), ITEM_REMOVED)
+		end
+		
+		if g_currentTier == 3 then
+			if Player_HasAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2" )) == false then
+				Player_AddAbility(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2"))
+			end
+			Player_SetAbilityAvailability(v.player, BP_GetAbilityBlueprint(g_modID .. "storm_switchtotier2"), ITEM_DEFAULT)
+		end
+	end
+end
+
+---------------------------------------------------------------------------------------------
+--- LATE GAME MODIFIERS: To maintain a sense of progression if the match goes on a long time
+---------------------------------------------------------------------------------------------
+
+-- Set Max Pop Cap to 100 for all players
+function Storm_UnlockMaxPopCap()
+	for k, v in pairs (t_playerDataTable) do
+		if v.race == "west_german" then
+			Player_SetPopCapOverride(v.player, 95)
+		else
+			Player_SetPopCapOverride(v.player, 100)
+		end
+	end
+	eventCue_popCapIncrease = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", 11045310, 11045310, 30, true) -- LOCDB [11045310] 'Population Cap Increased'
+	function _flashEventCue() flashID_popCap = UI_FlashEventCue(eventCue_popCapIncrease, true) end
+	function _stopFlashingEventCue() UI_StopFlashing(flashID_popCap) end
+	Rule_AddOneShot(_flashEventCue, 1)
+	Rule_AddOneShot(_stopFlashingEventCue, 10)
+	Rule_AddOneShot(Storm_ModifyXPReceived, g_timeToModifier)
+end
+
+-- Speed up unit veterancy for all players
+function Storm_ModifyXPReceived()
+	for k, v in pairs (t_playerDataTable) do
+		Modify_PlayerExperienceReceived(v.player, 2)
+	end
+	eventCue_vetIncrease = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:93", "$1e7d6ba9532e43e4985d7ee964c87d50:93", 30, true) -- LOCDB [93] 'Veterancy Rate Doubled'
+	function _flashEventCue() flashID_vet = UI_FlashEventCue(eventCue_vetIncrease, true) end
+	function _stopFlashingEventCue() UI_StopFlashing(flashID_vet) end
+	Rule_AddOneShot(_flashEventCue, 1)
+	Rule_AddOneShot(_stopFlashingEventCue, 10)
+	if g_customMap then
+		Rule_AddOneShot(Storm_ModifyVPCaptureTime, g_timeToModifier)
+	else
+		Rule_AddOneShot(Storm_ModifyMunitionsRate, g_timeToModifier)
+	end
+end	
+
+-- Double Munitions income for all players
+function Storm_ModifyMunitionsRate()
+	for k, v in pairs (t_playerDataTable) do
+		Modify_PlayerResourceRate(v.player, RT_Munition, 2)
+	end
+	eventCue_munitionsIncrease = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:94", "$1e7d6ba9532e43e4985d7ee964c87d50:94", 30, true) -- LOCDB [94] 'Munitions Income Doubled'
+	function _flashEventCue() flashID_munitions = UI_FlashEventCue(eventCue_munitionsIncrease, true) end
+	function _stopFlashingEventCue() UI_StopFlashing(flashID_munitions) end
+	Rule_AddOneShot(_flashEventCue, 1)
+	Rule_AddOneShot(_stopFlashingEventCue, 10)
+	Rule_AddOneShot(Storm_ModifyVPCaptureTime, g_timeToModifier)
+end
+
+-- Decrease the time required to capture VPs
+function Storm_ModifyVPCaptureTime()
+	if EGroup_Exists("eg_allVPs") and not EGroup_IsEmpty(eg_allVPs) then
+		Modify_CaptureTime(eg_allVPs, 3)
+		eventCue_captureTime = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:95", "$1e7d6ba9532e43e4985d7ee964c87d50:95", 30, true) -- LOCDB [95] 'VP Capture Time Reduced'
+		function _flashEventCue() flashID_captureTime = UI_FlashEventCue(eventCue_captureTime, true) end
+		function _stopFlashingEventCue() UI_StopFlashing(flashID_captureTime) end
+		Rule_AddOneShot(_flashEventCue, 1)
+		Rule_AddOneShot(_stopFlashingEventCue, 10)
+		Rule_AddOneShot(Storm_MakeHQsVulnerable, g_timeToModifier)
+	end
+end
+
+-- Make HQs vulnerable so players can win by Annihilate
+function Storm_MakeHQsVulnerable()
+	if (EGroup_Exists("eg_HQs_team1") and not EGroup_IsEmpty(eg_HQs_team1)) and (EGroup_Exists("eg_HQs_team2") and not EGroup_IsEmpty(eg_HQs_team2)) then
+		Modifier_RemoveAllFromEGroup(eg_HQs_team1)
+		Modifier_RemoveAllFromEGroup(eg_HQs_team2)
+		Modify_ReceivedDamage(eg_HQs_team1, 0.25, true)
+		Modify_ReceivedDamage(eg_HQs_team2, 0.25, true)
+		eventCue_weakenHQs = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:103", "$1e7d6ba9532e43e4985d7ee964c87d50:103", 30, true) -- LOCDB [103] 'HQs are now vulnerable'
+		function _flashEventCue() flashID_weakenHQs = UI_FlashEventCue(eventCue_weakenHQs, true) end
+		function _stopFlashingEventCue() UI_StopFlashing(flashID_weakenHQs) end
+		Rule_AddOneShot(_flashEventCue, 1)
+		Rule_AddOneShot(_stopFlashingEventCue, 10)
+	end
+end
+
+----------------------------------------------------------------------------
+--- ARTILLERY UNLOCKS: Grant artillery globals to teams as they lose VPs.
+----------------------------------------------------------------------------
+function _ArtilleryUnlock1_Team1()
+	if (VPTicker_GetTeamTickers(g_playerTeam_1) / g_gameVP) <= 0.666 then
+	
+		eventCue_t1arty1 = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:57", LOC(""), 30, true) -- locdb: LIGHT ARTILLERY Unlocked (Team 1)
+		
+		for k, v in pairs (t_playerDataTable) do
+			if Player_GetTeam(v.player) == g_playerTeam_1 then
+				if Player_GetResource(v.player,RT_Munition) < 150 then
+					Player_SetResource(v.player, RT_Munition,  150)
+				end
+				Cmd_Upgrade(v.player, BP_GetUpgradeBlueprint(g_modID .. "t5_arty_unlock1"), 1, true)
+			end
+		end
+
+		Rule_RemoveMe()
+		Rule_AddInterval(_ArtilleryUnlock2_Team1, 5)
+		Rule_AddOneShot(_flashEventCue_t1arty1, 1)
+		Rule_AddOneShot(_stopFlashingEventCue_t1arty1, 7)
+	end
+end
+
+function _ArtilleryUnlock1_Team2()
+	if (VPTicker_GetTeamTickers(g_playerTeam_2) / g_gameVP) <= 0.666 then
+	
+		eventCue_t2arty1 = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:58", LOC(""), 30, true) -- locdb: LIGHT ARTILLERY Unlocked (Team 2)
+		
+		for k, v in pairs (t_playerDataTable) do
+			if Player_GetTeam(v.player) == g_playerTeam_2 then
+				if Player_GetResource(v.player,RT_Munition) < 150 then
+					Player_SetResource(v.player, RT_Munition,  150)
+				end
+				Cmd_Upgrade(v.player, BP_GetUpgradeBlueprint(g_modID .. "t5_arty_unlock1"), 1, true)
+			end
+		end
+
+		Rule_RemoveMe()
+		Rule_AddInterval(_ArtilleryUnlock2_Team2, 5)
+		Rule_AddOneShot(_flashEventCue_t2arty1, 1)
+		Rule_AddOneShot(_stopFlashingEventCue_t2arty1, 7)
+	end
+end
+
+
+function _ArtilleryUnlock2_Team1()
+	if (VPTicker_GetTeamTickers(g_playerTeam_1) / g_gameVP) <= 0.333 then
+	
+		eventCue_t1arty2 = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:59", LOC(""), 30, true) -- locdb: HEAVY ARTILLERY Unlocked (Team 1)
+		
+		for k, v in pairs (t_playerDataTable) do
+			if Player_GetTeam(v.player) == g_playerTeam_1 then
+				if Player_GetResource(v.player,RT_Munition) < 250 then
+					Player_SetResource(v.player, RT_Munition,  250)
+				end
+				Cmd_Upgrade(v.player, BP_GetUpgradeBlueprint(g_modID .. "t5_arty_unlock2"), 1, true)
+			end
+		end
+		
+		Rule_RemoveMe()
+		Rule_AddOneShot(_flashEventCue_t1arty2, 1)
+		Rule_AddOneShot(_stopFlashingEventCue_t1arty2, 7)
+	end
+end
+
+function _ArtilleryUnlock2_Team2()
+	if (VPTicker_GetTeamTickers(g_playerTeam_2) / g_gameVP) <= 0.333 then
+	
+		eventCue_t2arty2 = UI_CreateEventCue("Icons_events_event_cue_upgrade", "", "$1e7d6ba9532e43e4985d7ee964c87d50:60", LOC(""), 30, true) -- locdb: HEAVY ARTILLERY Unlocked (Team 2)
+		
+		for k, v in pairs (t_playerDataTable) do
+			if Player_GetTeam(v.player) == g_playerTeam_2 then
+				if Player_GetResource(v.player,RT_Munition) < 250 then
+					Player_SetResource(v.player, RT_Munition,  250)
+				end
+				Cmd_Upgrade(v.player, BP_GetUpgradeBlueprint(g_modID .. "t5_arty_unlock2"), 1, true)
+			end
+		end
+		
+		Rule_RemoveMe()
+		Rule_AddOneShot(_flashEventCue_t2arty2, 1)
+		Rule_AddOneShot(_stopFlashingEventCue_t2arty2, 7)
+	end
+end
+
+
+-- Embarrassing Event Cue Flashes for Arty Unlocks
+function _flashEventCue_t1arty1() 
+	if eventCue_t1arty1 ~= nil then flashID_t1arty1 = UI_FlashEventCue(eventCue_t1arty1, true) end
+end
+
+function _stopFlashingEventCue_t1arty1() 
+	if flashID_t1arty1 ~= nil then UI_StopFlashing(flashID_t1arty1) end 
+end
+
+function _flashEventCue_t1arty2() 
+	if eventCue_t1arty2 ~= nil then flashID_t1arty2 = UI_FlashEventCue(eventCue_t1arty2, true) end
+end
+
+function _stopFlashingEventCue_t1arty2() 
+	if flashID_t1arty2 ~= nil then UI_StopFlashing(flashID_t1arty2) end
+end
+
+function _flashEventCue_t2arty1() 
+	if eventCue_t2arty1 ~= nil then flashID_t2arty1 = UI_FlashEventCue(eventCue_t2arty1, true) end
+end
+
+function _stopFlashingEventCue_t2arty1() 
+	if flashID_t2arty1 ~= nil then UI_StopFlashing(flashID_t2arty1) end
+end
+
+function _flashEventCue_t2arty2() 
+	if eventCue_t2arty2 ~= nil then flashID_t2arty2 = UI_FlashEventCue(eventCue_t2arty2, true) end
+end
+
+function _stopFlashingEventCue_t2arty2() 
+	if flashID_t2arty2 ~= nil then UI_StopFlashing(flashID_t2arty2) end
+end
+
+------------------------------------------------------------------------------
+-- Bonus Drops: Supplies are air-dropped and can be captured by either team 
+-- Supplies grant munitions or team-wide veterancy.
+------------------------------------------------------------------------------
+
+function Bonus_Timer()
+	if g_customMap then
+		Start_Bonus_Drop_Custom()
+	else
+		Start_Bonus_Drop()
+	end
+	Rule_RemoveMe()
+	if g_tier3_active == true then
+		Rule_AddDelayedInterval(Bonus_Timer, g_supplyDropInterval, 1)
+		g_supplyDropInterval = g_supplyDropInterval + 20
+	end
+end
+
+function Start_Bonus_Drop()
+	if g_gameisover == false and EGroup_Count(eg_strats) > 0 then
+
+		g_dropIndex = World_GetRand(1, EGroup_Count(eg_strats))
+		
+		local strat  = EGroup_GetSpawnedEntityAt(eg_strats, g_dropIndex)
+		
+		if Team_OwnsEntity(g_playerTeam_1, strat) then
+			g_lastDropOwner = 1
+		elseif Team_OwnsEntity(g_playerTeam_2, strat) then
+			g_lastDropOwner = 2
+		else
+			g_lastDropOwner = 0
+		end
+		
+		local centerPos = World_Pos(0, World_GetHeightAt(0,0), 0)
+		local maxDistance = math.sqrt(g_mapSize) * 8
+		local dropAttemptCount = 0
+		local dropFailed = false
+		
+		while (Team_OwnsEntity(g_playerTeam_1, strat) and g_lastDropOwner == 1) or (Team_OwnsEntity(g_playerTeam_2, strat) and g_lastDropOwner == 2) or (Util_GetDistance(strat, centerPos) > maxDistance) do
+			if g_dropIndex >= EGroup_Count(eg_strats) then
+				g_dropIndex = 1
+			else
+				g_dropIndex = g_dropIndex + 1
+			end
+			dropAttemptCount = dropAttemptCount + 1
+			if dropAttemptCount > 50 then
+				dropFailed = true
+				break
+			end
+			strat  = EGroup_GetSpawnedEntityAt(eg_strats, g_dropIndex)
+		end
+		
+		if not dropFailed then
+			drop_location = Util_GetOffsetPosition(strat, OFFSET_RIGHT, 6)
+			
+			UI_CreateMinimapBlip(drop_location, 5, BT_AttackHere )
+			bonus_ui = UI_CreateMinimapBlip(drop_location, -1, BT_ObjectiveSecondary)
+			bonus_hint = HintPoint_Add(drop_location, true, "$1e7d6ba9532e43e4985d7ee964c87d50:61", 3) -- locdb: Supply Drop
+			
+			Event_Timer(Random_Bonus_Drop, nil, 22)
+			Event_Timer(Random_Bonus_Drop_Message, nil, 30)
+			title_supply1 = UI_NewHUDFeature(HUDF_None, "$1e7d6ba9532e43e4985d7ee964c87d50:62", "Icons_commander_cmdr_german_air_dropped_resources", 5) -- locdb: Supply Drop incoming in 30 Seconds!
+		end
+	end
+end
+
+function Start_Bonus_Drop_Custom()
+	if g_gameisover == false then
+	
+		local t_bonus_drops = {}
+		
+		for i = 1,9 do
+			if Marker_Exists("mkr_drop_0" .. i, "") then
+				table.insert(t_bonus_drops, Marker_FromName("mkr_drop_0" .. i, ""))
+			end
+		end
+	
+		if table.getn(t_bonus_drops) > 0 then
+			if g_dropIndex >= table.getn(t_bonus_drops) then
+				g_dropIndex = 1
+			else
+				g_dropIndex = g_dropIndex + 1
+			end
+
+			drop_location = t_bonus_drops[g_dropIndex]
+			
+			UI_CreateMinimapBlip(Util_GetPosition(drop_location), 5, BT_AttackHere )
+			bonus_ui = UI_CreateMinimapBlip(Util_GetPosition(drop_location), -1, BT_ObjectiveSecondary)
+			bonus_hint = HintPoint_Add(Util_GetPosition(drop_location), true, "$1e7d6ba9532e43e4985d7ee964c87d50:61", 3) -- locdb: Supply Drop
+			
+			Event_Timer(Random_Bonus_Drop, nil, 22)
+			Event_Timer(Random_Bonus_Drop_Message, nil, 30)
+			title_supply1 = UI_NewHUDFeature(HUDF_None, "$1e7d6ba9532e43e4985d7ee964c87d50:62", "Icons_commander_cmdr_german_air_dropped_resources", 5) -- locdb: Supply Drop incoming in 30 Seconds!
+		end
+	end
+end
+
+
+function Random_Bonus_Drop()
+
+	for k,v in pairs(t_playerDataTable) do
+		if Player_IsAlive(v.player) then 
+			g_dropOwner = v.player
+			break
+		end
+	end
+	
+	if scartype(g_dropOwner) == ST_PLAYER then
+		Cmd_Ability(g_dropOwner, BP_GetAbilityBlueprint(g_modID .. "air_dropped_munitions_t5"), drop_location, nil, true)
+			if not Rule_Exists(SupplyDrop_GetEntity) then
+				Rule_Add(SupplyDrop_GetEntity)
+			end
+	end
+	UI_CreateMinimapBlip(Util_GetPosition(drop_location), 5, BT_AttackHere )
+	bonus_event = Event_Timer(End_Bonus_Drop, nil, 60)
+	bonus_rule = Rule_AddDelayedInterval(Bonus_UI, 15, 1)
+end
+
+function Random_Bonus_Drop_Message()
+	if g_gameisover == false then
+		title_supply2 = UI_NewHUDFeature(HUDF_None, "$1e7d6ba9532e43e4985d7ee964c87d50:63", "Icons_commander_cmdr_german_air_dropped_resources", 5) -- locdb: Supplies Dropped!
+	end
+end
+
+function End_Bonus_Drop()
+	if EGroup_CountSpawned(eg_bonus_drop) ~= 0 then
+		EGroup_DeSpawn(eg_bonus_drop)
+		if bonus_ui ~= nil then
+			UI_DeleteMinimapBlip(bonus_ui)
+		end
+		if bonus_hint ~=  nil then
+			HintPoint_Remove(bonus_hint)
+		end
+	end
+end
+
+function Bonus_UI()
+	if EGroup_CountSpawned(eg_bonus_drop) == 0 then
+		if bonus_ui ~= nil then
+			UI_DeleteMinimapBlip(bonus_ui)
+		end
+		if bonus_hint ~=  nil then
+			HintPoint_Remove(bonus_hint)
+		end
+		Rule_RemoveMe()
+	end
+end
+
+function SupplyDrop_GetEntity()
+	if scartype(drop_location) == ST_MARKER then
+		if EGroup_IsEmpty(eg_bonus_drop) then
+			Player_GetAllEntitiesNearMarker(g_dropOwner, eg_bonus_drop, Marker_GetPosition(drop_location), 5)
+			EGroup_Filter(eg_bonus_drop, BP_GetEntityBlueprint(g_modID .. "supply_drop_munitions_bonus"), FILTER_KEEP)
+		end
+	end
+end
+
+--- OUTRO EVENT
+VPVictoryMessageEvent = function()
+	if title_supply1 ~= nil then
+		UI_TitleDestroy(title_supply1)
+	end
+	if title_supply2 ~= nil then
+		UI_TitleDestroy(title_supply2)
+	end
+	
+	Sound_SetMusicCombatValue(2, 30)
+	
+	-- NIS not available in the mod :( 
+	
+	if Player_GetTeam(Game_GetLocalPlayer()) == g_winningTeam then
+		UI_NewHUDFeature(HUDF_None, "$1e7d6ba9532e43e4985d7ee964c87d50:66", "Icons_tooltips_victory_point", 5) -- locdb: Your Team Is Victorious!
+	else
+		UI_NewHUDFeature(HUDF_None, "$1e7d6ba9532e43e4985d7ee964c87d50:67", "Icons_tooltips_voting_surrender", 5) -- locdb: Your Team Has Been Defeated.
+	end
+
+end
+
+
+--- MODIFIED TEAM FUNCTIONS
+--- This mod requires some legacy Team functions
+function Team_OwnsEGroup( team, egroupID, any )
+	
+	if any == nil then any = ANY end
+	
+	_ownsEGroup = function(teamid, idx, playerid)
+		return Player_OwnsEGroup(playerid, egroupID, any)
+	end
+	
+	if scartype(team) == ST_TABLE then
+		return Team_ForEachAllOrAny(team, any, _ownsEGroup)
+	elseif scartype(team) == ST_NUMBER then
+		return Team_ForEachAllOrAny_LEGACY(team, any, _ownsEGroup)
+	end
+	
+end
+
+function Team_OwnsEntity( team, entityID, any )
+	
+	if any == nil then any = ANY end
+	
+	_ownsEntity = function(teamid, idx, playerid)
+		return Player_OwnsEntity(playerid, entityID, any)
+	end
+	
+	if scartype(team) == ST_TABLE then
+		return Team_ForEachAllOrAny(team, any, _ownsEntity)
+	elseif scartype(team) == ST_NUMBER then
+		return Team_ForEachAllOrAny_LEGACY(team, any, _ownsEntity)
+	end
+	
+end
+
+function Team_GetAllSquadsNearMarker(team, sgroupid, pos, range)
+	
+	__tempSG_near = SGroup_Create("__tempSG_near")
+	SGroup_Clear(__tempSG_near)
+	SGroup_Clear(sgroupid)
+	
+	if scartype(team) == ST_TABLE then
+	
+		for i = 1, table.getn(team) do
+			Player_GetAllSquadsNearMarker(team[i], __tempSG_near, pos, range)
+			SGroup_AddGroup(sgroupid, __tempSG_near)
+		end
+		
+	elseif scartype(team) == ST_NUMBER then
+	
+		local _players = Team_GetPlayers(team)
+		for i = 1, table.getn(_players) do
+			Player_GetAllSquadsNearMarker(_players[i], __tempSG_near, pos, range)
+			SGroup_AddGroup(sgroupid, __tempSG_near)
+		end	
+		
+	end
+	
+	SGroup_Destroy(__tempSG_near)
+	
+end
+
+function Team_GetEntitiesFromType(team, unitType)
+	local entitiesFromType = EGroup_Create("")
+	local _players = Team_GetPlayers(team)
+	
+	for i = 1, table.getn(_players) do
+		local allTheEntities = Player_GetEntities(_players[i])
+		
+		for i=1, EGroup_CountSpawned(allTheEntities) do
+			local entity = EGroup_GetSpawnedEntityAt(allTheEntities, i)
+			if (Entity_IsOfType(entity, unitType)) then
+				EGroup_Add(entitiesFromType, entity)
+			end
+		end
+	end
+	
+	return entitiesFromType
+end
+
+----- Tweaked MODIFIER function for removing costs from some squads
+--? @group Modifiers
+--? @shortdesc Modifies the cost of an entity for a particular player via multiplication. Possible resource types are RT_Manpower, RT_Munition, RT_Fuel, RT_Action 
+--? @result ModID
+--? @args PlayerID player, String blueprint, Integer resourcetype, Integer mult
+function Modify_EntityCostMult(playerid, blueprint, resource, mult)
+
+	local modifiertype = ""
+	
+	if (resource == RT_Manpower) then
+		modifiertype = "modifiers\\cost_manpower_modifier.lua"
+	elseif (resource == RT_Munition) then
+		modifiertype =  "modifiers\\cost_munition_modifier.lua"
+	elseif (resource == RT_Fuel) then
+		modifiertype =  "modifiers\\cost_fuel_modifier.lua"
+	elseif (resource == RT_Action) then
+		modifiertype =  "modifiers\\cost_action_modifier.lua"
+	end
+
+	local modifier = Modifier_Create(MAT_EntityType, modifiertype, MUT_Multiplication, false, mult, blueprint)
+
+	return {Modifier_ApplyToPlayer(modifier, playerid)}
+
+end	
+
+-------------------------------------------------
+-- Remove OKW command trucks if they auto-spawn
+-------------------------------------------------
+
+OKW_RemoveHalftracks = function ()
+	for k,player in pairs(t_okwPlayers) do
+		local squads = Player_GetSquads(player)
+		SGroup_Filter(squads, SBP.WEST_GERMAN.SWS_HALFTRACK_SQUAD_MP, FILTER_KEEP)
+		if SGroup_Count(squads) > 0 then
+			SGroup_DestroyAllSquads(squads)
+		end
+	end
+end
+
+-------------------------------------------------
+-- Set a flag if the game is being played on a
+-- map built specifically for Storm Mode
+-------------------------------------------------
+
+Storm_IsCustomMap = function ()
+	if Marker_Exists("mkr_drop_01", "") and EGroup_Exists("eg_vp_team1") and EGroup_Exists("eg_vp_team2") then
+		if not EGroup_IsEmpty(eg_vp_team1) and not EGroup_IsEmpty(eg_vp_team2) then
+			g_customMap = true
+			g_gameVP = 100
+			g_timeToTier2 = 240 * (g_mapSize / 400)^0.5 * (World_GetPlayerCount() / 4)^0.25
+			g_timeToTier3 = 600 * (g_mapSize / 400)^0.5 * (World_GetPlayerCount() / 4)^0.25
+			g_timeToModifier = (g_timeToTier2 + g_timeToTier3) / 2
+		end
+	end	
+end
+
+-----------------------
+-- Storm Atmospheres
+-----------------------
+
+function Storm_AtmosphereTransition1()
+	Game_LoadAtmosphere("data:art/scenarios/presets/atmosphere/DLC/tow_MudRoad311_lightning.aps", 900)
+end
+
+
+-----------------------------------------------------------------------------------
+-- VP Locator
+-- Find the Victory Points closest to each base area
+-- Capturing them can be a victory condition on some maps
+-----------------------------------------------------------------------------------
+
+function Storm_VictoryPointLocator()
+	eg_HQs_team1 = Team_GetEntitiesFromType(g_playerTeam_1, "hq") 
+	eg_HQs_team2 = Team_GetEntitiesFromType(g_playerTeam_2, "hq")
+	Modify_ReceivedDamage(eg_HQs_team1, 0.05, true)
+	Modify_ReceivedDamage(eg_HQs_team2, 0.05, true)
+	t_VPs = {}
+	local f = function (gid, idx, point)
+		table.insert(t_VPs, point)
+	end
+	EGroup_ForEach(eg_standardVPs, f)
+		
+	EGroup_Clear(eg_vp_team1)
+	EGroup_Add(eg_vp_team1, World_GetClosest(eg_HQs_team1, t_VPs))
+	
+	local hq1_to_vp1 = Util_GetDistance(eg_HQs_team1, eg_vp_team1)
+	local hq2_to_vp1 = Util_GetDistance(eg_HQs_team2, eg_vp_team1)
+
+	EGroup_Clear(eg_vp_team2)
+	EGroup_Add(eg_vp_team2, World_GetClosest(eg_HQs_team2, t_VPs))
+	
+	local hq1_to_vp2 = Util_GetDistance(eg_HQs_team1, eg_vp_team2)
+	local hq2_to_vp2 = Util_GetDistance(eg_HQs_team2, eg_vp_team2)
+	
+	local minDistance = g_mapSize / 10
+	
+	if (math.abs(hq2_to_vp1 - hq1_to_vp1) < minDistance) or (math.abs(hq1_to_vp2 - hq2_to_vp2) < minDistance) then
+		EGroup_Clear(eg_vp_team1)
+		EGroup_Clear(eg_vp_team2)
+	elseif EGroup_ContainsEGroup(eg_vp_team1, eg_vp_team2, ANY) == false then
+		g_captureObjectiveAllowed = true
+	end
+	
+end

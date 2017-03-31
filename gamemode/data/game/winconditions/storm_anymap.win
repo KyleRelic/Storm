@@ -1,0 +1,85 @@
+name = "Storm Win Condition"
+scar_file = "DATA:Scar/WinConditions/Storm_AnyMap.scar"
+fe_name = "Storm"
+fe_priority = 0
+score_display = vp_ticker
+show_time = true
+requires_vp_ticker = true
+permitted_categories = intel_bulletin + skin_pack + vehicle_decal + fatality
+entity_replacements = 
+{ 
+	{
+		original = "ebps/gameplay/territory_fuel_point_mp",
+		replacement = "1e7d6ba9532e43e4985d7ee964c87d50:ebps/gameplay/tactical_objectives/military_hospital_t5",
+	},
+	{
+		original = "ebps/gameplay/territory_munitions_point_mp",
+		replacement = "1e7d6ba9532e43e4985d7ee964c87d50:ebps/gameplay/territory_munitions_point_t5",
+	},
+	{
+		original = "ebps/gameplay/territory_point_mp",
+		replacement = "1e7d6ba9532e43e4985d7ee964c87d50:ebps/gameplay/territory_point_t5",
+	},
+	{
+		original = "ebps/gameplay/tactical_objectives/military_hospital",
+		replacement = "1e7d6ba9532e43e4985d7ee964c87d50:ebps/gameplay/territory_point_t5",
+	},
+	{
+		original = "ebps/gameplay/tactical_objectives/support_bay",
+		replacement = "1e7d6ba9532e43e4985d7ee964c87d50:ebps/gameplay/territory_point_t5",
+	},
+	{
+		original = "ebps/gameplay/victory_point_no_swap",
+		replacement = "1e7d6ba9532e43e4985d7ee964c87d50:ebps/gameplay/victory_point_t5",
+	},
+
+}
+
+
+starting_building_replacements =
+{
+    -- Replaces default starting building/squads with the specified building/squads on a per race biases.
+    {
+        original = "default_mp",
+        starting_buildings =
+        {
+            {
+                race = "aef",
+		building = "1e7d6ba9532e43e4985d7ee964c87d50:rifle_command_t5",
+                starting_squads =
+                {
+                    "1e7d6ba9532e43e4985d7ee964c87d50:rear_echelon_squad_t5",
+                },
+
+            },
+            {
+                race = "german",
+		building = "1e7d6ba9532e43e4985d7ee964c87d50:german_hq_t5",
+                starting_squads =
+                {
+                    "1e7d6ba9532e43e4985d7ee964c87d50:pioneer_squad_t5",
+                },
+
+            },
+            {
+                race = "soviet",
+		building = "1e7d6ba9532e43e4985d7ee964c87d50:hq_t5",
+                starting_squads =
+                {
+                    "1e7d6ba9532e43e4985d7ee964c87d50:combat_engineer_squad_t5",
+                },
+
+            },
+            {
+                race = "west_german",
+                building = "1e7d6ba9532e43e4985d7ee964c87d50:west_german_hq_t5",
+                starting_squads =
+                {
+                    "1e7d6ba9532e43e4985d7ee964c87d50:assault_pioneer_squad_t5",
+                },
+
+            },
+        },
+    },
+
+}
